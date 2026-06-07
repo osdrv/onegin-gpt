@@ -16,6 +16,12 @@ func FFN(input, w1, w2 *Tensor) (*Tensor, error) {
 	return MatMul(h, w2)
 }
 
+func FFNBackward(input, w1, w2, h, out *Tensor) {
+	MatMulBackward(h, w2, out)
+	ReLUBackward(h, h)
+	MatMulBackward(input, w1, h)
+}
+
 func TransformerBlock(x, wq, wk, wv, w1, w2 *Tensor) (*Tensor, error) {
 	// 1. Self-attention sub-layer
 	x_norm := &Tensor{
@@ -24,7 +30,7 @@ func TransformerBlock(x, wq, wk, wv, w1, w2 *Tensor) (*Tensor, error) {
 	LayerNorm(x_norm)
 
 	// attention_out = Attention(Q, K, V)
-	attn, err := Attention(x_norm, x_norm, x_norm) // the simplest self-attention
+	attn, _, _, err := Attention(x_norm, x_norm, x_norm) // the simplest self-attention
 	if err != nil {
 		return nil, err
 	}
@@ -41,4 +47,8 @@ func TransformerBlock(x, wq, wk, wv, w1, w2 *Tensor) (*Tensor, error) {
 	}
 
 	return Add(x, ffn_out)
+}
+
+func TransformerBlockBackward(x, attn_out, ffn_out, out *Tensor) {
+	AddBackward(x, ffn_out, out)
 }

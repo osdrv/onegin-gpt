@@ -5,16 +5,16 @@ import "testing"
 func TestAttention(t *testing.T) {
 	// Simple identity-like test
 	// Q: [1 0], K: [1 0; 0 1], V: [10 20; 30 40]
-	q := NewTensor(1, 2)
+	q := NewTensor(1, 1, 2)
 	q.Data = []float64{1, 0}
 
-	k := NewTensor(2, 2)
+	k := NewTensor(1, 2, 2)
 	k.Data = []float64{1, 0, 0, 1}
 
-	v := NewTensor(2, 2)
+	v := NewTensor(1, 2, 2)
 	v.Data = []float64{1, 0, 0, 1}
 
-	out, err := Attention(q, k, v)
+	out, _, _, err := Attention(q, k, v)
 	if err != nil {
 		t.Fatalf("Attention failed: %v", err)
 	}

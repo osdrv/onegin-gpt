@@ -7,64 +7,98 @@ import (
 )
 
 type Tensor struct {
-	Data []float64
-	Grad []float64
-	Rows int
-	Cols int
+	Data  []float64
+	Grad  []float64
+	Batch int
+	Rows  int
+	Cols  int
 }
 
-func NewTensor(rows, cols int) *Tensor {
+func NewTensor(batch, rows, cols int) *Tensor {
 	return &Tensor{
-		Data: make([]float64, rows*cols),
-		Grad: make([]float64, rows*cols),
-		Rows: rows,
-		Cols: cols,
+		Data:  make([]float64, batch*rows*cols),
+		Grad:  make([]float64, batch*rows*cols),
+		Batch: batch,
+		Rows:  rows,
+		Cols:  cols,
 	}
 }
 
-func (t *Tensor) At(r, c int) float64 {
-	return t.Data[r*t.Cols+c]
+func (t *Tensor) At(b, r, c int) float64 {
+	return t.Data[b*t.Rows*t.Cols+r*t.Cols+c]
 }
 
-func (t *Tensor) Set(r, c int, val float64) {
-	t.Data[r*t.Cols+c] = val
+func (t *Tensor) Set(b, r, c int, val float64) {
+	t.Data[b*t.Rows*t.Cols+r*t.Cols+c] = val
 }
 
 func MatMul(a, b *Tensor) (*Tensor, error) {
 	if a.Cols != b.Rows {
 		return nil, fmt.Errorf("incompatible dimensions: %dx%d Vs %dx%d", a.Rows, a.Cols, b.Rows, b.Cols)
 	}
-	out := NewTensor(a.Rows, b.Cols)
-	for i := range a.Rows {
-		for j := range b.Cols {
-			sum := 0.0
-			for k := range a.Cols {
-				sum += a.At(i, k) * b.At(k, j)
+	out := NewTensor(a.Batch, a.Rows, b.Cols)
+
+	aStride := a.Rows * a.Cols
+	bStride := b.Rows * b.Cols
+	outStride := out.Rows * out.Cols
+
+	for bix := 0; bix < a.Batch; bix++ {
+		aOff := bix * aStride
+		bOff := 0
+		if b.Batch > 1 {
+			bOff = bix * bStride
+		}
+		outOff := bix * outStride
+
+		for i := 0; i < a.Rows; i++ {
+			aRowStart := aOff + i*a.Cols
+			outRowStart := outOff + i*out.Cols
+
+			for k := 0; k < a.Cols; k++ {
+				av := a.Data[aRowStart+k]
+				if av == 0 {
+					continue
+				}
+				bRowStart := bOff + k*b.Cols
+
+				// SIMD reading
+				for j := 0; j < b.Cols; j++ {
+					out.Data[outRowStart+j] += av * b.Data[bRowStart+j]
+				}
 			}
-			out.Set(i, j, sum)
 		}
 	}
+
 	return out, nil
 }
 
 // In a Transformer, we use this for residual connections
 func Add(a, b *Tensor) (*Tensor, error) {
-	if a.Rows != b.Rows || a.Cols != b.Cols {
-		return nil, fmt.Errorf("dimensions mismatch: %dx%d Vs %dx%d", a.Rows, a.Cols, b.Rows, b.Cols)
+	if len(a.Data) != len(b.Data) {
+		return nil, fmt.Errorf("size mismatch: %d Vs %d", len(a.Data), len(b.Data))
 	}
-	out := NewTensor(a.Rows, a.Cols)
-	for i := range a.Data {
-		out.Data[i] = a.Data[i] + b.Data[i]
+
+	out := NewTensor(a.Batch, a.Rows, a.Cols)
+
+	aData := a.Data
+	bData := b.Data
+	outData := out.Data
+
+	for i := 0; i < len(aData); i++ {
+		outData[i] = aData[i] + bData[i]
 	}
+
 	return out, nil
 }
 
 // We need this because attention calculates QK^T
 func Transpose(t *Tensor) *Tensor {
-	out := NewTensor(t.Cols, t.Rows)
-	for r := range t.Rows {
-		for c := range t.Cols {
-			out.Set(c, r, t.At(r, c))
+	out := NewTensor(t.Batch, t.Cols, t.Rows)
+	for bix := range t.Batch {
+		for r := range t.Rows {
+			for c := range t.Cols {
+				out.Set(bix, c, r, t.At(bix, r, c))
+			}
 		}
 	}
 	return out
@@ -73,52 +107,56 @@ func Transpose(t *Tensor) *Tensor {
 // Softmax turns a list of numbers into probabilities that sum to 1.
 // In a Transformer, it determines which words the model should "attend" to.
 func Softmax(t *Tensor) {
-	for r := range t.Rows {
-		max := t.At(r, 0)
-		for c := 1; c < t.Cols; c++ {
-			if t.At(r, c) > max {
-				max = t.At(r, c)
+	for bix := range t.Batch {
+		for r := range t.Rows {
+			max := t.At(bix, r, 0)
+			for c := 1; c < t.Cols; c++ {
+				if t.At(bix, r, c) > max {
+					max = t.At(bix, r, c)
+				}
 			}
-		}
-		sum := 0.0
-		for c := range t.Cols {
-			val := math.Exp(t.At(r, c) - max)
-			t.Set(r, c, val)
-			sum += val
-		}
+			sum := 0.0
+			for c := range t.Cols {
+				val := math.Exp(t.At(bix, r, c) - max)
+				t.Set(bix, r, c, val)
+				sum += val
+			}
 
-		for c := range t.Cols {
-			t.Set(r, c, t.At(r, c)/sum)
+			for c := range t.Cols {
+				t.Set(bix, r, c, t.At(bix, r, c)/sum)
+			}
 		}
 	}
 }
 
 func SoftmaxBackward(probs, out *Tensor) {
-	for r := range probs.Rows {
-		dot := 0.0
-		for c := range probs.Cols {
-			dot += probs.At(r, c) * out.Grad[r*probs.Cols+c]
-		}
-		for c := range probs.Cols {
-			p := probs.At(r, c)
-			g := out.Grad[r*probs.Cols+c]
-			probs.Grad[r*probs.Cols+c] += p * (g - dot)
+	for bix := 0; bix < probs.Batch; bix++ {
+		for r := 0; r < probs.Rows; r++ {
+			dot := 0.0
+			for c := 0; c < probs.Cols; c++ {
+				dot += probs.At(bix, r, c) * out.GradAt(bix, r, c)
+			}
+			for c := 0; c < probs.Cols; c++ {
+				p := probs.At(bix, r, c)
+				g := out.GradAt(bix, r, c)
+				probs.AddGrad(bix, r, c, p*(g-dot))
+			}
 		}
 	}
 }
 
 // LayerNorm works by making the mean of a row 0 and its variance 1.
 // To do this, we need to calculate the average and deviation for each row.
-func (t *Tensor) RowMeanVar(r int) (mean, variance float64) {
+func (t *Tensor) RowMeanVar(b, r int) (mean, variance float64) {
 	sum := 0.0
-	for c := range t.Cols {
-		sum += t.At(r, c)
+	for c := 0; c < t.Cols; c++ {
+		sum += t.At(b, r, c)
 	}
 	mean = sum / float64(t.Cols)
 
 	sqDiffSum := 0.0
-	for c := range t.Cols {
-		diff := t.At(r, c) - mean
+	for c := 0; c < t.Cols; c++ {
+		diff := t.At(b, r, c) - mean
 		sqDiffSum += diff * diff
 	}
 	variance = sqDiffSum / float64(t.Cols)
@@ -127,36 +165,40 @@ func (t *Tensor) RowMeanVar(r int) (mean, variance float64) {
 
 func LayerNorm(t *Tensor) {
 	eps := 1e-5
-	for r := range t.Rows {
-		mean, variance := t.RowMeanVar(r)
-		std := math.Sqrt(variance + eps)
-		for c := range t.Cols {
-			val := (t.At(r, c) - mean) / std
-			t.Set(r, c, val)
+	for bix := 0; bix < t.Batch; bix++ {
+		for r := 0; r < t.Rows; r++ {
+			mean, variance := t.RowMeanVar(bix, r)
+			std := math.Sqrt(variance + eps)
+			for c := 0; c < t.Cols; c++ {
+				val := (t.At(bix, r, c) - mean) / std
+				t.Set(bix, r, c, val)
+			}
 		}
 	}
 }
 
 func LayerNormBackward(input, out *Tensor) {
 	eps := 1e-5
-	for r := range input.Rows {
-		mean, variance := input.RowMeanVar(r)
-		std := math.Sqrt(variance + eps)
+	for bix := 0; bix < input.Batch; bix++ {
+		for r := 0; r < input.Rows; r++ {
+			mean, variance := input.RowMeanVar(bix, r)
+			std := math.Sqrt(variance + eps)
 
-		var gradSum, gradDot float64
-		for c := range input.Cols {
-			g := out.Grad[r*input.Cols+c]
-			gradSum += g
-			gradDot += g * (input.At(r, c) - mean)
-		}
+			var gradSum, gradDot float64
+			for c := 0; c < input.Cols; c++ {
+				g := out.GradAt(bix, r, c)
+				gradSum += g
+				gradDot += g * (input.At(bix, r, c) - mean)
+			}
 
-		for c := range input.Cols {
-			g := out.Grad[r*input.Cols+c]
-			term1 := float64(input.Cols) * g
-			term2 := gradSum
-			term3 := (input.At(r, c) - mean) * gradDot / (variance + eps)
+			for c := 0; c < input.Cols; c++ {
+				g := out.GradAt(bix, r, c)
+				term1 := float64(input.Cols) * g
+				term2 := gradSum
+				term3 := (input.At(bix, r, c) - mean) * gradDot / (variance + eps)
 
-			input.Grad[r*input.Cols+c] += (term1 - term2 - term3) / (float64(input.Cols) * std)
+				input.AddGrad(bix, r, c, (term1-term2-term3)/(float64(input.Cols)*std))
+			}
 		}
 	}
 }
@@ -164,9 +206,10 @@ func LayerNormBackward(input, out *Tensor) {
 // If a number is negative, make it 0. This is the "brain" that allows
 // the model to learn non-linear patterns.
 func ReLU(t *Tensor) {
-	for i := range t.Data {
-		if t.Data[i] < 0 {
-			t.Data[i] = 0
+	data := t.Data // cache locally
+	for i := 0; i < len(data); i++ {
+		if data[i] < 0 {
+			data[i] = 0
 		}
 	}
 }
@@ -175,9 +218,12 @@ func ReLU(t *Tensor) {
 // through unchanged. If the input was negative or zero, the gradient
 // is blocked (set to 0).
 func ReLUBackward(input, out *Tensor) {
-	for i := range input.Data {
-		if input.Data[i] > 0 {
-			input.Grad[i] += out.Grad[i]
+	inData := input.Data
+	inGrad := input.Grad
+	outGrad := out.Grad
+	for i := 0; i < len(inData); i++ {
+		if inData[i] > 0 {
+			inGrad[i] += outGrad[i]
 		}
 	}
 }
@@ -193,25 +239,29 @@ func AddBackward(a, b, out *Tensor) {
 
 // For C = A × B:
 //   - grad_A = grad_C × B^T
-//   - grad_B = A^T × grad_C
+//   - grad_B = Σ (A^T × grad_C)
 func MatMulBackward(a, b, out *Tensor) {
-	for i := range a.Rows {
-		for j := range a.Cols {
-			sum := 0.0
-			for k := range out.Cols {
-				sum += out.Grad[i*out.Cols+k] * b.Data[j*b.Cols+k]
+	for bix := 0; bix < out.Batch; bix++ {
+		// 1. grad_A = grad_out * B^T
+		for i := 0; i < a.Rows; i++ {
+			for k := 0; k < out.Cols; k++ {
+				gOk := out.GradAt(bix, i, k)
+				for j := 0; j < a.Cols; j++ {
+					a.AddGrad(bix, i, j, gOk*b.At(0, j, k))
+				}
 			}
-			a.Grad[i*a.Cols+j] += sum
 		}
-	}
-
-	for i := range b.Rows {
-		for j := range b.Cols {
-			sum := 0.0
-			for k := range out.Rows {
-				sum += a.Data[k*a.Cols+i] * out.Grad[k*out.Cols+j]
+		// 2. grad_B = Σ (A^T * grad_out)
+		for i := 0; i < b.Rows; i++ {
+			for k := 0; k < a.Rows; k++ {
+				av := a.At(bix, k, i)
+				if av == 0 {
+					continue
+				}
+				for j := 0; j < b.Cols; j++ {
+					b.AddGrad(0, i, j, av*out.GradAt(bix, k, j))
+				}
 			}
-			b.Grad[i*b.Cols+j] += sum
 		}
 	}
 }
@@ -222,37 +272,50 @@ func (t *Tensor) ZeroGrad() {
 	}
 }
 
+func (t *Tensor) GradAt(b, r, c int) float64 {
+	return t.Grad[b*t.Rows*t.Cols+r*t.Cols+c]
+}
+
+func (t *Tensor) SetGrad(b, r, c int, val float64) {
+	t.Grad[b*t.Rows*t.Cols+r*t.Cols+c] = val
+}
+
+func (t *Tensor) AddGrad(b, r, c int, val float64) {
+	t.Grad[b*t.Rows*t.Cols+r*t.Cols+c] += val
+}
+
 // CrossEntropyLoss calculates the loss and sets gradients on 'probs'
-// 'probs' is the output of Softmax, 'targets' is a slice of correct token IDs
-func CrossEntropyLoss(probs *Tensor, targets []int) (float64, error) {
+// 'probs' is the output of Softmax, 'targets' is a 2D slice [batch][seq]
+func CrossEntropyLoss(probs *Tensor, targets [][]int) (float64, error) {
 	loss := 0.0
 	probs.ZeroGrad()
 
-	for r := range probs.Rows {
-		targetID := targets[r]
-		// Loss = -log(probability of the correct class)
-		prob := probs.At(r, targetID)
-		// We add a tiny epsilon to avoid log(0)
-		loss -= math.Log(prob + 1e-10)
+	totalExamples := float64(probs.Batch * probs.Rows)
 
-		// Gradient of (Softmax + CrossEntropy) is simply: prob - 1
-		// (for the correct class)
-		// For all other classes, it's just: prob - 0
-		for c := range probs.Cols {
-			p := probs.At(r, c)
-			if c == targetID {
-				probs.Grad[r*probs.Cols+c] = (p - 1.0) / float64(probs.Rows)
-			} else {
-				probs.Grad[r*probs.Cols+c] = p / float64(probs.Rows)
+	for bix := 0; bix < probs.Batch; bix++ {
+		for r := 0; r < probs.Rows; r++ {
+			targetID := targets[bix][r]
+			prob := probs.At(bix, r, targetID)
+			loss -= math.Log(prob + 1e-10)
+
+			for c := 0; c < probs.Cols; c++ {
+				p := probs.At(bix, r, c)
+				if c == targetID {
+					probs.SetGrad(bix, r, c, (p-1.0)/totalExamples)
+				} else {
+					probs.SetGrad(bix, r, c, p/totalExamples)
+				}
 			}
 		}
 	}
-	return loss / float64(probs.Rows), nil
+	return loss / totalExamples, nil
 }
 
 func (t *Tensor) Step(lr float64) {
-	for i := range t.Data {
-		t.Data[i] -= lr * t.Grad[i]
+	data := t.Data
+	grad := t.Grad
+	for i := 0; i < len(data); i++ {
+		data[i] -= lr * grad[i]
 	}
 }
 

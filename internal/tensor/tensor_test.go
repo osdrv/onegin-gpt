@@ -7,11 +7,11 @@ import (
 
 func TestMatMul(t *testing.T) {
 	// A = [1 2; 3 4]
-	a := NewTensor(2, 2)
+	a := NewTensor(1, 2, 2)
 	a.Data = []float64{1, 2, 3, 4}
 
 	// B = [5 6; 7 8]
-	b := NewTensor(2, 2)
+	b := NewTensor(1, 2, 2)
 	b.Data = []float64{5, 6, 7, 8}
 
 	// Expected C = A * B = [19 22; 43 50]
@@ -29,9 +29,9 @@ func TestMatMul(t *testing.T) {
 }
 
 func TestAdd(t *testing.T) {
-	a := NewTensor(2, 2)
+	a := NewTensor(1, 2, 2)
 	a.Data = []float64{1, 2, 3, 4}
-	b := NewTensor(2, 2)
+	b := NewTensor(1, 2, 2)
 	b.Data = []float64{10, 20, 30, 40}
 
 	res, err := Add(a, b)
@@ -49,9 +49,8 @@ func TestAdd(t *testing.T) {
 
 func TestTranspose(t *testing.T) {
 	// A = [1 2 3; 4 5 6] (2x3)
-	a := NewTensor(2, 3)
+	a := NewTensor(1, 2, 3)
 	a.Data = []float64{1, 2, 3, 4, 5, 6}
-
 	// Expected At = [1 4; 2 5; 3 6] (3x2)
 	res := Transpose(a)
 
@@ -68,7 +67,7 @@ func TestTranspose(t *testing.T) {
 }
 
 func TestSoftmax(t *testing.T) {
-	tnsr := NewTensor(1, 3)
+	tnsr := NewTensor(1, 1, 3)
 	tnsr.Data = []float64{1.0, 2.0, 3.0}
 
 	Softmax(tnsr)
@@ -89,12 +88,12 @@ func TestSoftmax(t *testing.T) {
 }
 
 func TestLayerNorm(t *testing.T) {
-	tnsr := NewTensor(1, 4)
+	tnsr := NewTensor(1, 1, 4)
 	tnsr.Data = []float64{10, 20, 30, 40}
 
 	LayerNorm(tnsr)
 
-	mean, variance := tnsr.RowMeanVar(0)
+	mean, variance := tnsr.RowMeanVar(0, 0)
 
 	if math.Abs(mean) > 1e-9 {
 		t.Errorf("Expected mean 0, got %f", mean)
