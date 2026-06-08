@@ -3,6 +3,8 @@
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 
+<img src="https://github.com/osdrv/onegin-gpt/blob/main/web/nkshp.jpg" width="150" alt="A.S.P" />
+
 A "bits-to-the-ground" implementation of a Generative Pre-trained Transformer (GPT) from absolute scratch in Go, specifically trained on Pushkin's *Eugene Onegin*. **Zero dependencies.** No PyTorch, no TensorFlow, no Gonum—just the standard library and pure mathematics.
 
 ```text
