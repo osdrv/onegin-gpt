@@ -9,7 +9,7 @@ A "bits-to-the-ground" implementation of a Generative Pre-trained Transformer (G
        .---.           .---.           .---.
       /     \         /     \         /     \
      |  BPE  | ----> | Attn  | ----> | GGUF  |
-      \     /         \     /         /     \
+      \     /         \     /         \     /
        '---'           '---'           '---'
     Tokenizer       Transformer       Export
 ```
